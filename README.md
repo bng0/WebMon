@@ -21,3 +21,13 @@ Traffic flow:
 5. Logstash processes logs from modsecurity and kong gateway and creates indices to store them in elasticsearch.
 6. Kibana is used to visualize logs stored in elasticsearch.
 
+**Konga Connection**
+![konga_connection](https://user-images.githubusercontent.com/32485988/158130317-b4b0b2e7-5eba-4bc8-851a-28358c2332b8.png)
+
+
+**Dashboard**
+![dashboard1](https://user-images.githubusercontent.com/32485988/158130335-c6731bc3-4b22-44da-a6a9-9d163e89327a.png)
+
+
+![dash2](https://user-images.githubusercontent.com/32485988/158130369-1d77ff08-48ee-4892-ac41-5c8df18614fd.png)
+
