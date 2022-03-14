@@ -1,0 +1,196 @@
+version: "3"
+services:
+
+  postgres:
+    container_name: db_api
+    image: postgres:9.6.23-alpine3.14
+    environment:
+      - POSTGRES_USER=kong
+      - POSTGRES_PASSWORD=kong
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    healthcheck:
+      test: ["CMD","pg_isready","-U","kong"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - 5432:5432
+    networks:
+      mons:
+        ipv4_address: 172.20.0.2
+    restart: on-failure
+
+  migrations_bootstrap:
+    container_name: bootstrap_api
+    image: custom/kong:1
+    environment:
+      - KONG_DATABASE=postgres
+      - KONG_PG_HOST=db_api
+      - KONG_PG_USER=kong
+      - KONG_PG_PASSWORD=kong
+    command: kong migrations bootstrap
+    depends_on: 
+      - postgres
+    restart: on-failure
+    networks:
+      mons:
+        ipv4_address: 172.20.0.3
+
+  kong:
+    image: custom/kong:1
+    container_name: kong_api
+    environment:
+      - KONG_DATABASE=postgres
+      - KONG_PG_USERNAME=kong
+      - KONG_PG_PASSWORD=kong
+      - KONG_PG_HOST=db_api
+      - KONG_PROXY_ACCESS_LOG=/dev/null
+      - KONG_ADMIN_ACCESS_LOG=/dev/null
+      - KONG_PROXY_ERROR_LOG=/dev/null
+      - KONG_ADMIN_ERROR_LOG=/dev/null
+      - KONG_ADMIN_LISTEN=0.0.0.0:8001, 0.0.0.0:8444 ssl
+    ports:
+      - "8443:8443"
+      - "8001:8001"
+      - "8000:8000"
+    networks:
+      mons:
+        ipv4_address: 172.20.0.5
+    volumes:
+      - "./kong/hosts:/etc/hosts"
+      - "./kong/kong.conf:/etc/kong/kong.conf"
+      - "./kong/nginx-kong.conf:/usr/local/kong/nginx-kong.conf"
+      - "./tmp/:/tmp/"
+    depends_on: 
+      - postgres
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://172.20.0.5:8001"]
+      interval: 5s
+      timeout: 2s
+      retries: 15
+
+  konga:
+    image: pantsel/konga:latest
+    container_name: konga_api
+    environment:
+      - TOKEN_SECRET=TheSecretToken
+      - NODE_ENV=production
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+      - NO_AUTH=true
+    ports:
+      - "1337:1337"
+    networks:
+      mons:
+        ipv4_address: 172.20.0.6
+    depends_on: 
+      - kong
+    restart: on-failure
+
+  elasticsearch:
+    image: elasticsearch:7.16.2
+    container_name: elasticsearch_api
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      - xpack.security.enabled=false
+      - xpack.monitoring.enabled=false
+      - xpack.ml.enabled=false
+      - xpack.graph.enabled=false
+      - xpack.watcher.enabled=false
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - "./elastic/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml"
+      - "./elastic/data/:/usr/share/elasticsearch/data/"
+    networks:
+      mons:
+        ipv4_address: 172.20.0.7
+    restart: on-failure
+
+  logstash:
+    image: logstash:7.16.2
+    container_name: logstash_api
+    environment:
+      - XPACK_MONITORING_ENABLED=false
+    ports:
+      - "9998:9998/tcp"
+      - "9999:9999/tcp"
+    volumes:
+      - "./logstash/logstash.conf:/usr/share/logstash/pipeline/logstash.conf"
+    networks:
+      mons:
+        ipv4_address: 172.20.0.8
+    restart: on-failure
+
+  kibana:
+    image: kibana:7.16.2
+    container_name: kibana_api
+    environment:
+      - XPACK_MONITORING_ENABLED=false
+    ports:
+      - "5601:5601/tcp"
+    volumes:
+      - "./kibana/kibana.yml:/usr/share/kibana/config/kibana.yml"
+    networks:
+      mons:
+        ipv4_address: 172.20.0.9
+    restart: on-failure
+    depends_on: 
+      - elasticsearch
+
+  modsecurity:
+    image: owasp/modsecurity-crs:3.3.2-nginx
+    container_name: modsec_api
+    ports: 
+      - "80:80"
+      - "443:443"
+    environment:
+      - PROXY=1
+      - BACKEND=http://172.20.0.5:8000
+      - ACCESSLOG=/dev/null
+      - MODSEC_REQ_BODY_ACCESS=on
+      - MODSEC_RESP_BODY_ACCESS=on
+      - MODSEC_AUDIT_LOG_PARTS=ABCDEFHIJKZ
+      - MODSEC_AUDIT_LOG=/var/log/modsec_audit.log
+      - MODSEC_AUDIT_LOG_FORMAT=JSON
+      - MODSEC_RULE_ENGINE=DetectionOnly
+      - ALLOWED_METHODS=GET POST PUT OPTIONS DELETE
+      - RESTRICTED_EXTENSIONS=.asa/ .asax/ .ascx/ .axd/ .backup/ .bak/ .bat/ .cdx/ .cer/ .cert/ .cfg/ .cmd/ .cnf/ .com/ .config/ .conf/ .cs/ .csproj/ .csr/ .dat/ .db/ .dbf/ .dll/ .dos/ .htr/ .htw/ .ida/ .idc/ .idq/ .inc/ .ini/ .key/ .licx/ .lnk/ .log/ .mdb/ .old/ .pass/ .pdb/ .pol/ .printer/ .pwd/ .rdb/ .resources/ .resx/ .sql/ .swp/ .sys/ .vb/ .vbs/ .vbproj/ .vsdisco/ .webinfo/ .xsd/ .xsx/
+      - STATIC_EXTENSIONS=/.jpg/ /.jpeg/ /.png/ /.gif/ /.js/ /.css/ /.ico/ /.svg/ /.webp/ /.html/
+    volumes:
+      - "./tmp/modsec_audit.log:/var/log/modsec_audit.log"
+    networks:
+      mons:
+        ipv4_address: 172.20.0.10
+  filebeat_modsec:
+    image: docker.elastic.co/beats/filebeat:8.0.0
+    container_name: filebeat_modsec_api
+    volumes:
+      - "./filebeat_modsec/filebeat.yml:/usr/share/filebeat/filebeat.yml"
+      - "./tmp/modsec_audit.log:/tmp/modsec_audit.log"
+    restart: on-failure
+    networks:
+      mons:
+        ipv4_address: 172.20.0.11
+
+  filebeat_kong:
+    image: docker.elastic.co/beats/filebeat:8.0.0
+    container_name: filebeat_kong_api
+    volumes:
+      - "./filebeat_kong/filebeat.yml:/usr/share/filebeat/filebeat.yml"
+      - "./tmp/kong.log:/tmp/kong.log"
+    restart: on-failure
+    networks:
+      mons:
+        ipv4_address: 172.20.0.12
+
+networks:
+  mons:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.20.0.0/24
+
